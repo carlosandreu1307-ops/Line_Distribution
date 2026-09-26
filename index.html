@@ -128,7 +128,7 @@ textarea{resize:vertical;padding:8px;}
 }
 .hbar-row {
   position: absolute;
-  left: 0; right: 0; height: 46px; /* Altura de la tarjeta */
+  left: 0; right: 0; height: 46px; 
   transition: transform 0.5s ease-out, filter 1s ease, opacity 1s ease;
   will-change: transform;
 }
@@ -296,7 +296,6 @@ body.recording-active, body.recording-active * {
           <div id="yt-player"></div>
         </div>
         <div id="live-stats-container" style="display:flex; justify-content:center; align-items:center; flex:1; width:100%;">
-            <!-- Tamaño ampliado proporcionalmente -->
             <div style="position:relative; width:240px; height:240px;">
                 <canvas id="live-donut-canvas" width="240" height="240" style="position:absolute; top:0; left:0;"></canvas>
                 <div id="live-donut-center" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
@@ -537,7 +536,7 @@ function getIncludedMembers(memberId) {
     const nameStr = String(m.name).trim();
     let included = [];
     if (nameStr === 'ALL') {
-        members.forEach((other, idx) => { if (isDisplayableMember(other)) included.push(idx); });
+        return [];
     } else if (nameStr.includes('+')) {
         const subNames = nameStr.split('+').map(n => n.trim().toLowerCase());
         members.forEach((other, idx) => {
@@ -686,7 +685,7 @@ function renderS(){
         <button class="btn" onclick="captureT(${i}, 'end')" style="padding:4px 6px;" title="Capturar Tiempo"><i class="ti ti-clock"></i></button>
       </div>
       <div style="display:flex; flex-direction:column; gap:4px;">
-        <input type="text" placeholder="Letra (+ para fusionar con la anterior)" value="${s.lyric}" onchange="segments[${i}].lyric=this.value;buildChatEvents();" />
+        <input type="text" placeholder="Letra (+ unir al lado, / unir debajo)" value="${s.lyric}" onchange="segments[${i}].lyric=this.value;buildChatEvents();" />
         <input type="text" placeholder="Traducción (Opcional)" value="${s.translation||''}" onchange="segments[${i}].translation=this.value;buildChatEvents();" />
       </div>
       <select onchange="segments[${i}].memberId=+this.value;this.style.borderLeft='3px solid '+(members[+this.value]||members[0]).color;buildChatEvents();" style="border-left:3px solid ${m.color};width:100%;height:100%;">${mopts(s.memberId)}</select>
@@ -855,64 +854,42 @@ function buildChatEvents() {
   let bubbles = [];
   let currentBubble = null;
 
-  // Lógica actualizada: Cortamos el bocadillo si tiene 5 o más líneas visuales (4 max)
   let sortedSegs = [...segments].map((s, i) => ({...s, originalIndex: i})).sort((a,b) => a.start - b.start);
-
-  // Fase 1: Agrupar por líneas visuales primero
-  let visualLines = [];
-  let currentLine = null;
 
   sortedSegs.forEach((seg) => {
       let text = (seg.lyric || '').trim();
       let isPlus = text.startsWith('+');
+      let isSlash = text.startsWith('/');
       
-      if (isPlus && currentLine) {
-          currentLine.segments.push(seg);
-          currentLine.end = Math.max(currentLine.end, seg.end);
-          getDisplayMembers(seg.memberId).forEach(id => currentLine.memberSet.add(id));
-      } else {
-          let mSet = new Set(getDisplayMembers(seg.memberId));
-          currentLine = {
-              start: seg.start,
-              end: seg.end,
-              segments: [seg],
-              memberSet: mSet
-          };
-          visualLines.push(currentLine);
-      }
-  });
-
-  // Fase 2: Agrupar líneas visuales en burbujas con límite de 4
-  visualLines.forEach(vl => {
       if (!currentBubble) {
-          currentBubble = { 
-              segments: [...vl.segments], 
-              start: vl.start, 
-              end: vl.end, 
-              memberSet: new Set(vl.memberSet),
-              visualLineCount: 1 
-          };
+          currentBubble = { segments: [seg], start: seg.start, end: seg.end, visualLines: 1 };
           bubbles.push(currentBubble);
       } else {
-          let gap = vl.start - currentBubble.end;
+          let gap = seg.start - currentBubble.end;
+          let prevSeg = currentBubble.segments[currentBubble.segments.length - 1];
+          
+          let prevMembers = new Set(getDisplayMembers(prevSeg.memberId));
+          let segMembers = new Set(getDisplayMembers(seg.memberId));
           
           let isSameMembers = false;
-          if (currentBubble.memberSet.size === vl.memberSet.size) {
-              isSameMembers = [...currentBubble.memberSet].every(id => vl.memberSet.has(id));
+          if (prevMembers.size === segMembers.size) {
+              isSameMembers = [...prevMembers].every(id => segMembers.has(id));
           }
           
-          if (isSameMembers && gap < 2.5 && currentBubble.visualLineCount < 4) {
-              currentBubble.segments.push(...vl.segments);
-              currentBubble.end = Math.max(currentBubble.end, vl.end);
-              currentBubble.visualLineCount++;
+          // Agrupar inteligentemente con + , / , o mismo integrante consecutivo
+          if (isPlus) {
+              currentBubble.segments.push(seg);
+              currentBubble.end = Math.max(currentBubble.end, seg.end);
+          } else if (isSlash) {
+              currentBubble.segments.push(seg);
+              currentBubble.end = Math.max(currentBubble.end, seg.end);
+              currentBubble.visualLines++;
+          } else if (isSameMembers && gap < 2.5 && currentBubble.visualLines < 4) {
+              currentBubble.segments.push(seg);
+              currentBubble.end = Math.max(currentBubble.end, seg.end);
+              currentBubble.visualLines++;
           } else {
-              currentBubble = { 
-                  segments: [...vl.segments], 
-                  start: vl.start, 
-                  end: vl.end, 
-                  memberSet: new Set(vl.memberSet),
-                  visualLineCount: 1 
-              };
+              currentBubble = { segments: [seg], start: seg.start, end: seg.end, visualLines: 1 };
               bubbles.push(currentBubble);
           }
       }
@@ -963,6 +940,8 @@ function renderChatHistory(visibleEvents, t) {
           const uniqueMemberIds = [...new Set(allIncludedIds)];
           const bubbleMembers = uniqueMemberIds.map(id => members[id] || members[0] || {name:'-', color:'#000'});
           
+          let isAllBubble = bubbleMembers.every(m => String(m.name).trim() === 'ALL');
+
           let avatarsHtml = bubbleMembers.map(m => {
               return m.avatar 
                   ? `<img src="${m.avatar}" style="width:24px;height:24px;border-radius:50%;object-fit:cover; border:1.5px solid ${m.color}">` 
@@ -971,12 +950,24 @@ function renderChatHistory(visibleEvents, t) {
           
           let namesHtml = bubbleMembers.map(m => `<span style="color:${m.color};">${m.name}</span>`).join(' <span style="color:var(--color-text-secondary)">&</span> ');
 
+          let headerHtml = '';
+          if (!isAllBubble) {
+              headerHtml = `
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div style="display:flex; gap:4px;">${avatarsHtml}</div>
+                <span style="font-size:12px;font-weight:700;text-transform:uppercase;">${namesHtml}</span>
+              </div>`;
+          }
+
           let linesHtml = '';
           b.segments.forEach((seg, i) => {
               const m = members[seg.memberId] || members[0] || {color:'#000'};
               let text = (seg.lyric || '').trim();
               let isPlus = text.startsWith('+');
+              let isSlash = text.startsWith('/');
+              
               if (isPlus) text = text.replace(/^\+\s*/, '');
+              if (isSlash) text = text.replace(/^\/\s*/, '');
               
               const progress = Math.max(0, Math.min(1, (t - seg.start) / (seg.end - seg.start)));
               
@@ -1016,10 +1007,7 @@ function renderChatHistory(visibleEvents, t) {
 
           html += `
             <div class="anim-box" style="margin-bottom: 0px; flex-shrink: 0; ${animStyle}">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                <div style="display:flex; gap:4px;">${avatarsHtml}</div>
-                <span style="font-size:12px;font-weight:700;text-transform:uppercase;">${namesHtml}</span>
-              </div>
+              ${headerHtml}
               ${linesHtml}
               ${transHtml}
             </div>
@@ -1094,13 +1082,28 @@ function updateAnim(t){
   document.getElementById('scrubber').value = t;
 
   const totals=computeTotals(t);
-  const order=[...members.map((_,i)=>i)].sort((a,b)=>totals[b]-totals[a]);
-
+  
   drawLiveDonut(totals);
+
+  const order=[...members.map((_,i)=>i)].sort((a,b)=>totals[b]-totals[a]);
 
   const actives = segments.filter(s => t >= s.start && t < s.end);
   let activeSingers = new Set();
-  actives.forEach(s => { getIncludedMembers(s.memberId).forEach(idx => activeSingers.add(idx)); });
+  
+  let parenthesisSingers = new Set(); 
+  
+  actives.forEach(s => { 
+      let isParen = s.lyric && (s.lyric.includes('(') || s.lyric.includes(')'));
+      const currentIncluded = getIncludedMembers(s.memberId);
+      currentIncluded.forEach(idx => {
+          activeSingers.add(idx);
+          if (isParen) parenthesisSingers.add(idx);
+      });
+  });
+
+  const finalTotals = computeTotals(dur);
+  const validFinalTotals = finalTotals.filter((_, i) => isDisplayableMember(members[i]));
+  globalMaxT = Math.max(validFinalTotals.length > 0 ? Math.max(...validFinalTotals) : 0, 1);
 
   const ROW_HEIGHT = 58; 
   const isDark = document.body.classList.contains('dark-theme');
@@ -1121,6 +1124,7 @@ function updateAnim(t){
     
     let isFinished = t > globalMaxEnds[i] && globalMaxEnds[i] > 0;
     let isSinging = activeSingers.has(i);
+    let hasParen = parenthesisSingers.has(i);
 
     if(status) {
         if (isFinished) status.style.backgroundColor = '#E24B4A'; // Rojo
@@ -1131,7 +1135,11 @@ function updateAnim(t){
     if(isSinging) {
        row.style.filter = 'grayscale(0%)';
        row.style.opacity = '1';
-       if(isDark) {
+       
+       if (hasParen) {
+           track.style.boxShadow = '0 0 12px 2px rgba(241, 196, 15, 0.8), inset 0 1px 3px rgba(0,0,0,0.1)';
+           track.style.borderColor = '#f1c40f'; // Glow Amarillo
+       } else if(isDark) {
            track.style.boxShadow = '0 0 12px 2px rgba(255, 255, 255, 0.7), inset 0 1px 3px rgba(0,0,0,0.1)';
            track.style.borderColor = 'rgba(255, 255, 255, 0.9)';
        } else {
@@ -1166,7 +1174,6 @@ function updateAnim(t){
       updateActiveKaraoke(visibleEvents, t);
   }
 
-  // --- LÓGICA CONJUNTA "IS TYPING" ---
   let recentSingersDisplay = [];
   if (actives.length > 0) {
       actives.forEach(s => {
@@ -1193,7 +1200,9 @@ function updateAnim(t){
           nextGroupIds.push(...getDisplayMembers(seg.memberId));
       });
       
-      const uniqueTyperIds = [...new Set(nextGroupIds)].filter(id => !recentSingersDisplay.includes(id));
+      const uniqueTyperIds = [...new Set(nextGroupIds)]
+          .filter(id => !recentSingersDisplay.includes(id))
+          .filter(id => String(members[id]?.name || '').trim() !== 'ALL');
       
       if (uniqueTyperIds.length > 0) {
           const namesHTML = uniqueTyperIds.map(id => {
@@ -1481,6 +1490,7 @@ function importData(e) {
       
       projectBgColor = data.projectBgColor || '';
       projectBg = data.projectBg || '';
+      applyBg();
       
       if (data.currentVideoId) {
         document.getElementById('yt-url').value = data.currentVideoId;
@@ -1518,7 +1528,7 @@ function importData(e) {
   reader.readAsText(file); e.target.value = ''; 
 }
 
-initDisplayState();renderM();renderS();
+initDisplayState();renderM();renderS();updateAnim(0);
 </script>
 </body>
 </html>
