@@ -245,7 +245,18 @@ body.recording-active, body.recording-active * {
 
   <div class="stitle" style="margin-top:1rem;">Generador Rápido de Letra</div>
   <div class="card" style="display:flex;flex-direction:column;gap:8px;">
-    <textarea id="bulk-lyrics" rows="3" placeholder="Pega aquí tu letra. Cada línea creará un segmento nuevo con 5 segundos por defecto." style="width:100%;"></textarea>
+    
+    <div style="display:flex; gap:8px;">
+        <div style="flex:1;">
+            <label style="font-size:11px;color:var(--color-text-secondary);margin-bottom:4px;display:block;">Letra Principal (Coreano/Original)</label>
+            <textarea id="bulk-lyrics" rows="4" placeholder="Pega aquí la letra principal." style="width:100%;"></textarea>
+        </div>
+        <div style="flex:1;">
+            <label style="font-size:11px;color:var(--color-text-secondary);margin-bottom:4px;display:block;">Traducción / Romanización</label>
+            <textarea id="bulk-translation" rows="4" placeholder="Pega aquí la romanización. Si es exactamente igual a la línea principal (ej. una frase en inglés), se omitirá sola." style="width:100%;"></textarea>
+        </div>
+    </div>
+
     <button class="btn" onclick="addBulkLyrics()" style="align-self:flex-start;"><i class="ti ti-list-check"></i> Generar líneas</button>
   </div>
 
@@ -361,7 +372,6 @@ const PAL=[
 let members=[
   {name:'Jin', group:'', color:PAL[0], avatar:''},
   {name:'Suga', group:'', color:PAL[1], avatar:''},
-  {name:'J-Hope', group:'', color:PAL[2], avatar:''},
   {name:'ALL', group:'', color:PAL[8], avatar:''}, 
 ];
 let segments=[
@@ -685,7 +695,7 @@ function renderS(){
         <button class="btn" onclick="captureT(${i}, 'end')" style="padding:4px 6px;" title="Capturar Tiempo"><i class="ti ti-clock"></i></button>
       </div>
       <div style="display:flex; flex-direction:column; gap:4px;">
-        <input type="text" placeholder="Letra (+ unir al lado, / unir debajo)" value="${s.lyric}" onchange="segments[${i}].lyric=this.value;buildChatEvents();" />
+        <input type="text" placeholder="Letra (+ lado, / debajo)" value="${s.lyric}" onchange="segments[${i}].lyric=this.value;buildChatEvents();" />
         <input type="text" placeholder="Traducción (Opcional)" value="${s.translation||''}" onchange="segments[${i}].translation=this.value;buildChatEvents();" />
       </div>
       <select onchange="segments[${i}].memberId=+this.value;this.style.borderLeft='3px solid '+(members[+this.value]||members[0]).color;buildChatEvents();" style="border-left:3px solid ${m.color};width:100%;height:100%;">${mopts(s.memberId)}</select>
@@ -712,11 +722,35 @@ function rmS(i){
 function removeAllS(){ if(confirm("¿Seguro que quieres vaciar todo?")) { segments = []; activeCapIdx=0; renderS(); } }
 
 function addBulkLyrics() {
-  const text = document.getElementById('bulk-lyrics').value; if (!text.trim()) return;
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const textMain = document.getElementById('bulk-lyrics').value;
+  const textTrans = document.getElementById('bulk-translation').value;
+  
+  if (!textMain.trim() && !textTrans.trim()) return;
+  
+  const linesMain = textMain.split('\n').map(l => l.trim());
+  const linesTrans = textTrans.split('\n').map(l => l.trim());
+  
   let lastEnd = segments.length > 0 ? segments[segments.length - 1].end : 0;
-  lines.forEach(line => { segments.push({ start: lastEnd, end: lastEnd + 5, lyric: line, translation:'', memberId: 0 }); lastEnd += 5; });
-  document.getElementById('bulk-lyrics').value = ''; renderS();
+  
+  let maxLines = Math.max(linesMain.length, linesTrans.length);
+  
+  for(let i = 0; i < maxLines; i++) {
+     let main = linesMain[i] || '';
+     let trans = linesTrans[i] || '';
+     
+     if(!main && !trans) continue;
+     
+     if(main.toLowerCase() === trans.toLowerCase()) {
+         trans = '';
+     }
+     
+     segments.push({ start: lastEnd, end: lastEnd + 5, lyric: main, translation: trans, memberId: 0 });
+     lastEnd += 5;
+  }
+  
+  document.getElementById('bulk-lyrics').value = '';
+  document.getElementById('bulk-translation').value = '';
+  renderS();
 }
 
 function initDisplayState(){ 
@@ -875,8 +909,7 @@ function buildChatEvents() {
           if (prevMembers.size === segMembers.size) {
               isSameMembers = [...prevMembers].every(id => segMembers.has(id));
           }
-          
-          // Agrupar inteligentemente con + , / , o mismo integrante consecutivo
+
           if (isPlus) {
               currentBubble.segments.push(seg);
               currentBubble.end = Math.max(currentBubble.end, seg.end);
@@ -1227,7 +1260,6 @@ function updateAnim(t){
 
 function loop(ts){
   if(!playing)return;
-  
   if(!lastTS) lastTS = ts;
   const dt = (ts - lastTS) / 1000 * playSpeed;
   lastTS = ts;
