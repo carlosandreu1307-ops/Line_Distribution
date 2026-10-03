@@ -546,6 +546,7 @@ function getIncludedMembers(memberId) {
     const nameStr = String(m.name).trim();
     let included = [];
     if (nameStr === 'ALL') {
+        // ALL no suma puntos
         return [];
     } else if (nameStr.includes('+')) {
         const subNames = nameStr.split('+').map(n => n.trim().toLowerCase());
@@ -731,7 +732,6 @@ function addBulkLyrics() {
   const linesTrans = textTrans.split('\n').map(l => l.trim());
   
   let lastEnd = segments.length > 0 ? segments[segments.length - 1].end : 0;
-  
   let maxLines = Math.max(linesMain.length, linesTrans.length);
   
   for(let i = 0; i < maxLines; i++) {
@@ -890,39 +890,69 @@ function buildChatEvents() {
 
   let sortedSegs = [...segments].map((s, i) => ({...s, originalIndex: i})).sort((a,b) => a.start - b.start);
 
+  // Fase 1: Agrupar por líneas visuales primero
+  let visualLines = [];
+  let currentLine = null;
+
   sortedSegs.forEach((seg) => {
       let text = (seg.lyric || '').trim();
       let isPlus = text.startsWith('+');
-      let isSlash = text.startsWith('/');
       
+      if (isPlus && currentLine) {
+          currentLine.segments.push(seg);
+          currentLine.end = Math.max(currentLine.end, seg.end);
+          getDisplayMembers(seg.memberId).forEach(id => currentLine.memberSet.add(id));
+      } else {
+          let mSet = new Set(getDisplayMembers(seg.memberId));
+          currentLine = {
+              start: seg.start,
+              end: seg.end,
+              segments: [seg],
+              memberSet: mSet
+          };
+          visualLines.push(currentLine);
+      }
+  });
+
+  // Fase 2: Agrupar líneas visuales en burbujas con límite de 4
+  visualLines.forEach(vl => {
       if (!currentBubble) {
-          currentBubble = { segments: [seg], start: seg.start, end: seg.end, visualLines: 1 };
+          currentBubble = { 
+              segments: [...vl.segments], 
+              start: vl.start, 
+              end: vl.end, 
+              memberSet: new Set(vl.memberSet),
+              visualLineCount: 1 
+          };
           bubbles.push(currentBubble);
       } else {
-          let gap = seg.start - currentBubble.end;
-          let prevSeg = currentBubble.segments[currentBubble.segments.length - 1];
-          
-          let prevMembers = new Set(getDisplayMembers(prevSeg.memberId));
-          let segMembers = new Set(getDisplayMembers(seg.memberId));
+          let gap = vl.start - currentBubble.end;
           
           let isSameMembers = false;
-          if (prevMembers.size === segMembers.size) {
-              isSameMembers = [...prevMembers].every(id => segMembers.has(id));
+          if (currentBubble.memberSet.size === vl.memberSet.size) {
+              isSameMembers = [...currentBubble.memberSet].every(id => vl.memberSet.has(id));
           }
+          
+          // Verificamos si la PRIMERA frase de esta nueva línea visual empezaba con "/"
+          let startsWithSlash = (vl.segments[0].lyric || '').trim().startsWith('/');
 
-          if (isPlus) {
-              currentBubble.segments.push(seg);
-              currentBubble.end = Math.max(currentBubble.end, seg.end);
-          } else if (isSlash) {
-              currentBubble.segments.push(seg);
-              currentBubble.end = Math.max(currentBubble.end, seg.end);
-              currentBubble.visualLines++;
-          } else if (isSameMembers && gap < 2.5 && currentBubble.visualLines < 4) {
-              currentBubble.segments.push(seg);
-              currentBubble.end = Math.max(currentBubble.end, seg.end);
-              currentBubble.visualLines++;
+          // LO JUNTA SI: Empieza con /, o si son los mismos integrantes con poca pausa (y no excede 4 lineas)
+          if (startsWithSlash || (isSameMembers && gap < 2.5 && currentBubble.visualLineCount < 4)) {
+              currentBubble.segments.push(...vl.segments);
+              currentBubble.end = Math.max(currentBubble.end, vl.end);
+              currentBubble.visualLineCount++;
+              // Si se unió con slash, añadimos a los cantantes a la cabecera general de la burbuja
+              if(startsWithSlash) {
+                  vl.memberSet.forEach(id => currentBubble.memberSet.add(id));
+              }
           } else {
-              currentBubble = { segments: [seg], start: seg.start, end: seg.end, visualLines: 1 };
+              currentBubble = { 
+                  segments: [...vl.segments], 
+                  start: vl.start, 
+                  end: vl.end, 
+                  memberSet: new Set(vl.memberSet),
+                  visualLineCount: 1 
+              };
               bubbles.push(currentBubble);
           }
       }
@@ -1260,6 +1290,7 @@ function updateAnim(t){
 
 function loop(ts){
   if(!playing)return;
+  
   if(!lastTS) lastTS = ts;
   const dt = (ts - lastTS) / 1000 * playSpeed;
   lastTS = ts;
@@ -1334,7 +1365,7 @@ async function recordScreen() {
     alert("NOTA IMPORTANTE:\n\n1. En la ventana emergente, elige la opción 'Pestaña de Chrome' (NO 'Ventana' ni 'Toda la pantalla') para que la grabación sea limpia.\n2. Asegúrate de activar 'Compartir audio de la pestaña'.");
     
     const displayStream = await navigator.mediaDevices.getDisplayMedia({ 
-      video: { displaySurface: "browser", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } }, 
+      video: { displaySurface: "browser", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, 
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000 },
       preferCurrentTab: true 
     });
@@ -1361,8 +1392,16 @@ async function recordScreen() {
     }
 
     const combinedStream = new MediaStream(tracks);
-    const options = { videoBitsPerSecond: 8000000, audioBitsPerSecond: 192000 };
-    if (MediaRecorder.isTypeSupported('video/webm; codecs=vp9')) options.mimeType = 'video/webm; codecs=vp9';
+    
+    const options = { videoBitsPerSecond: 5000000, audioBitsPerSecond: 128000 }; 
+    
+    if (MediaRecorder.isTypeSupported('video/webm; codecs=h264')) {
+        options.mimeType = 'video/webm; codecs=h264';
+    } else if (MediaRecorder.isTypeSupported('video/webm; codecs=vp8')) {
+        options.mimeType = 'video/webm; codecs=vp8';
+    } else if (MediaRecorder.isTypeSupported('video/mp4; codecs=avc1')) {
+        options.mimeType = 'video/mp4; codecs=avc1';
+    }
 
     const recorder = new MediaRecorder(combinedStream, options);
     const chunks = [];
@@ -1371,8 +1410,12 @@ async function recordScreen() {
     recorder.onstop = () => {
       document.body.classList.remove('recording-active');
       const songTitle = document.getElementById('song-title').value.trim();
-      const fileName = songTitle ? songTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_video.webm' : 'line_distribution_video.webm';
-      const blob = chunks.length > 0 ? new Blob(chunks, { type: 'video/webm' }) : null;
+      
+      let ext = '.webm';
+      if(options.mimeType && options.mimeType.includes('mp4')) ext = '.mp4';
+      
+      const fileName = songTitle ? songTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_video' + ext : 'line_distribution_video' + ext;
+      const blob = chunks.length > 0 ? new Blob(chunks, { type: options.mimeType || 'video/webm' }) : null;
       if (blob) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url; a.download = fileName; a.click();
