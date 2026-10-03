@@ -307,6 +307,7 @@ body.recording-active, body.recording-active * {
           <div id="yt-player"></div>
         </div>
         <div id="live-stats-container" style="display:flex; justify-content:center; align-items:center; flex:1; width:100%;">
+            <!-- Tamaño ampliado proporcionalmente -->
             <div style="position:relative; width:240px; height:240px;">
                 <canvas id="live-donut-canvas" width="240" height="240" style="position:absolute; top:0; left:0;"></canvas>
                 <div id="live-donut-center" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
@@ -546,7 +547,7 @@ function getIncludedMembers(memberId) {
     const nameStr = String(m.name).trim();
     let included = [];
     if (nameStr === 'ALL') {
-        // ALL no suma puntos
+        // ALL NO suma puntos a la barra de progreso
         return [];
     } else if (nameStr.includes('+')) {
         const subNames = nameStr.split('+').map(n => n.trim().toLowerCase());
@@ -696,7 +697,7 @@ function renderS(){
         <button class="btn" onclick="captureT(${i}, 'end')" style="padding:4px 6px;" title="Capturar Tiempo"><i class="ti ti-clock"></i></button>
       </div>
       <div style="display:flex; flex-direction:column; gap:4px;">
-        <input type="text" placeholder="Letra (+ lado, / debajo)" value="${s.lyric}" onchange="segments[${i}].lyric=this.value;buildChatEvents();" />
+        <input type="text" placeholder="Letra (+ unir al lado, / unir debajo)" value="${s.lyric}" onchange="segments[${i}].lyric=this.value;buildChatEvents();" />
         <input type="text" placeholder="Traducción (Opcional)" value="${s.translation||''}" onchange="segments[${i}].translation=this.value;buildChatEvents();" />
       </div>
       <select onchange="segments[${i}].memberId=+this.value;this.style.borderLeft='3px solid '+(members[+this.value]||members[0]).color;buildChatEvents();" style="border-left:3px solid ${m.color};width:100%;height:100%;">${mopts(s.memberId)}</select>
@@ -869,6 +870,7 @@ function drawLiveDonut(totals) {
   }
 }
 
+// NUEVA LÓGICA DE UN SOLO PASE PARA NO ROMPER EL "AUTO-GROUPING"
 function buildChatEvents() {
   chatEvents = [];
   if(!members || members.length === 0) return;
@@ -887,72 +889,50 @@ function buildChatEvents() {
 
   let bubbles = [];
   let currentBubble = null;
+  let currentVisualLineMembers = new Set();
+  let visualLinesCount = 0;
 
   let sortedSegs = [...segments].map((s, i) => ({...s, originalIndex: i})).sort((a,b) => a.start - b.start);
-
-  // Fase 1: Agrupar por líneas visuales primero
-  let visualLines = [];
-  let currentLine = null;
 
   sortedSegs.forEach((seg) => {
       let text = (seg.lyric || '').trim();
       let isPlus = text.startsWith('+');
+      let isSlash = text.startsWith('/');
       
-      if (isPlus && currentLine) {
-          currentLine.segments.push(seg);
-          currentLine.end = Math.max(currentLine.end, seg.end);
-          getDisplayMembers(seg.memberId).forEach(id => currentLine.memberSet.add(id));
-      } else {
-          let mSet = new Set(getDisplayMembers(seg.memberId));
-          currentLine = {
-              start: seg.start,
-              end: seg.end,
-              segments: [seg],
-              memberSet: mSet
-          };
-          visualLines.push(currentLine);
-      }
-  });
+      let segMembersArray = getDisplayMembers(seg.memberId);
+      let segMembersSet = new Set(segMembersArray);
 
-  // Fase 2: Agrupar líneas visuales en burbujas con límite de 4
-  visualLines.forEach(vl => {
       if (!currentBubble) {
-          currentBubble = { 
-              segments: [...vl.segments], 
-              start: vl.start, 
-              end: vl.end, 
-              memberSet: new Set(vl.memberSet),
-              visualLineCount: 1 
-          };
+          currentBubble = { segments: [seg], start: seg.start, end: seg.end };
+          visualLinesCount = 1;
+          currentVisualLineMembers = new Set(segMembersArray);
           bubbles.push(currentBubble);
       } else {
-          let gap = vl.start - currentBubble.end;
+          let gap = seg.start - currentBubble.end;
           
           let isSameMembers = false;
-          if (currentBubble.memberSet.size === vl.memberSet.size) {
-              isSameMembers = [...currentBubble.memberSet].every(id => vl.memberSet.has(id));
+          if (currentVisualLineMembers.size === segMembersSet.size) {
+              isSameMembers = [...currentVisualLineMembers].every(id => segMembersSet.has(id));
           }
           
-          // Verificamos si la PRIMERA frase de esta nueva línea visual empezaba con "/"
-          let startsWithSlash = (vl.segments[0].lyric || '').trim().startsWith('/');
-
-          // LO JUNTA SI: Empieza con /, o si son los mismos integrantes con poca pausa (y no excede 4 lineas)
-          if (startsWithSlash || (isSameMembers && gap < 2.5 && currentBubble.visualLineCount < 4)) {
-              currentBubble.segments.push(...vl.segments);
-              currentBubble.end = Math.max(currentBubble.end, vl.end);
-              currentBubble.visualLineCount++;
-              // Si se unió con slash, añadimos a los cantantes a la cabecera general de la burbuja
-              if(startsWithSlash) {
-                  vl.memberSet.forEach(id => currentBubble.memberSet.add(id));
-              }
+          if (isPlus) {
+              currentBubble.segments.push(seg);
+              currentBubble.end = Math.max(currentBubble.end, seg.end);
+              segMembersArray.forEach(id => currentVisualLineMembers.add(id));
+          } else if (isSlash) {
+              currentBubble.segments.push(seg);
+              currentBubble.end = Math.max(currentBubble.end, seg.end);
+              visualLinesCount++;
+              currentVisualLineMembers = new Set(segMembersArray);
+          } else if (isSameMembers && gap < 2.5 && visualLinesCount < 4) {
+              currentBubble.segments.push(seg);
+              currentBubble.end = Math.max(currentBubble.end, seg.end);
+              visualLinesCount++;
+              currentVisualLineMembers = new Set(segMembersArray);
           } else {
-              currentBubble = { 
-                  segments: [...vl.segments], 
-                  start: vl.start, 
-                  end: vl.end, 
-                  memberSet: new Set(vl.memberSet),
-                  visualLineCount: 1 
-              };
+              currentBubble = { segments: [seg], start: seg.start, end: seg.end };
+              visualLinesCount = 1;
+              currentVisualLineMembers = new Set(segMembersArray);
               bubbles.push(currentBubble);
           }
       }
@@ -1392,9 +1372,7 @@ async function recordScreen() {
     }
 
     const combinedStream = new MediaStream(tracks);
-    
-    const options = { videoBitsPerSecond: 5000000, audioBitsPerSecond: 128000 }; 
-    
+    const options = { videoBitsPerSecond: 5000000, audioBitsPerSecond: 128000 };
     if (MediaRecorder.isTypeSupported('video/webm; codecs=h264')) {
         options.mimeType = 'video/webm; codecs=h264';
     } else if (MediaRecorder.isTypeSupported('video/webm; codecs=vp8')) {
@@ -1410,10 +1388,8 @@ async function recordScreen() {
     recorder.onstop = () => {
       document.body.classList.remove('recording-active');
       const songTitle = document.getElementById('song-title').value.trim();
-      
       let ext = '.webm';
       if(options.mimeType && options.mimeType.includes('mp4')) ext = '.mp4';
-      
       const fileName = songTitle ? songTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_video' + ext : 'line_distribution_video' + ext;
       const blob = chunks.length > 0 ? new Blob(chunks, { type: options.mimeType || 'video/webm' }) : null;
       if (blob) {
